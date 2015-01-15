@@ -55,9 +55,7 @@
  *   resolver (Resurrect.NamespaceResolver(window)): Converts between
  *     a name and a prototype. Create a custom resolver if your
  *     constructors are not stored in global variables. The resolver
- *     has two methods: getName(object) and getPrototype(string
- *
- *   Also includes new options to be worked out.
+ *     has two methods: getName(object) and getPrototype(string).
  *
  * For example,
  *
@@ -93,13 +91,6 @@ function Resurrect(options) {
     this.prefix = '#';
     this.cleanup = false;
     this.revive = true;
-    this.replacer = null;
-    this.space = null;
-    this.ownPropertyOnly = true;
-    this.toCodeList = null;
-    this.replacements = null;
-    this.ignoredObjects = null;
-    this.ignoredConstructors = null;
     for (var option in options) {
         if (options.hasOwnProperty(option)) {
             this[option] = options[option];
@@ -109,7 +100,6 @@ function Resurrect(options) {
     this.origcode = this.prefix + 'original';
     this.buildcode = this.prefix + '.';
     this.valuecode = this.prefix + 'v';
-    this.branchcode = this.prefix + 'branch';
 }
 
 /**
@@ -118,12 +108,6 @@ function Resurrect(options) {
  * @constant
  */
 Resurrect.GLOBAL = (0, eval)('this');
-
-/**
- * Represents a field to be ignored in serialization.
- * @constant
- */
-Resurrect.IGNORE = {};
 
 /**
  * Escape special regular expression characters in a string.
@@ -188,12 +172,8 @@ Resurrect.NamespaceResolver.prototype.getName = function(object) {
     }
 
     if (constructor === '') {
-        constructor = object.constructor.resurrectName;
-        if(constructor === null || constructor === '' || constructor === undefined) {
-            return '(anonymous constructor)';
-        } else {
-            return constructor;
-        }
+        var msg = "Can't serialize objects with anonymous constructors.";
+        throw new Resurrect.prototype.Error(msg);
     } else if (constructor === 'Object' || constructor === 'Array') {
         return null;
     } else {
@@ -214,64 +194,6 @@ Resurrect.Node = function(html) {
     var div = document.createElement('div');
     div.innerHTML = html;
     return div.firstChild;
-};
-
-/**
- * Represents straight text to be added to the stringified
- * object as javascript code, not as a string.
- * @param {string} string
- * @constructor
- */
-Resurrect.CodeObject = function(string) {
-    this.string = string;
-};
-
-/**
- * A convenient function for converting text to a code object
- * without calling new CodeObject().
- * @param string
- * @returns A CodeObject containing the source code contained in
- * string.
- */
-Resurrect.toCode = function(string) {
-    return new Resurrect.CodeObject(string);
-};
-
-/**
- * @param {function} convertible
- * @returns {string} A string that holds the convertibles's definition
- * in a browser-executeable form.
- */
-Resurrect.functionToString = function(convertible) {
-    //Change this to deal appropriately with owner objects and namespaces.
-    var result = convertible.toString();
-    if(Resurrect.isNativeFunction(convertible)) {
-        var index = 0;
-        var tempSubstring = '';
-        var newResult = '';
-        while(tempSubstring != 'function ') {
-            tempSubstring += result[index];
-            index++;
-        }
-        tempSubstring = '';
-        while(result[index] !== '(') {
-            newResult += result[index];
-            index++;
-        }
-        result = newResult;
-    }
-    return result;
-};
-
-/**
- * @param {function} functionToTest
- * @returns True if functionToTest is a native browser function.
- * @see http://stackoverflow.com/a/7536972
- */
-Resurrect.isNativeFunction = function(functionToTest) {
-    return  !!functionToTest && (typeof functionToTest).toLowerCase() == 'function' 
-            && (functionToTest === Function.prototype 
-            || /^\s*function\s*(\b[a-z$_][a-z0-9$_]*\b)*\s*\((|([a-z$_][a-z0-9$_]*)(\s*,[a-z$_][a-z0-9$_]*)*)\)\s*{\s*\[native code\]\s*}\s*$/i.test(String(functionToTest)));
 };
 
 /* Type Tests */
@@ -297,7 +219,7 @@ Resurrect.isRegExp = Resurrect.is('RegExp');
 Resurrect.isObject = Resurrect.is('Object');
 
 Resurrect.isAtom = function(object) {
-    return (!Resurrect.isObject(object) || Resurrect.isIgnored(object) || Resurrect.isCode(object)) && !Resurrect.isArray(object);
+    return !Resurrect.isObject(object) && !Resurrect.isArray(object);
 };
 
 /**
@@ -311,126 +233,7 @@ Resurrect.isPrimitive = function(object) {
         Resurrect.isBoolean(object);
 };
 
-/**
- * @param {*} object
- * @returns {boolean} True if object has been marked with Resurrect.IGNORE.
- */
-Resurrect.isIgnored = function(object) {
-    return object === Resurrect.IGNORE;
-};
-
-/**
- * @param {*} object
- * @returns {boolean} True if object is an instance of CodeObject.
- */
-Resurrect.isCode = function(object) {
-    return object instanceof Resurrect.CodeObject;
-};
-
 /* Methods */
-
-/**
- * @param {*} replaceable
- * @returns {*} The result of replacing replaceable based on all
- * of the calling Resurrect instance's replacement lists that
- * replaceable is contained in.
- * @method
- */
-Resurrect.prototype.replaceByLists = function(replaceable) {
-    var result = this.replaceByToCodeList(replaceable);
-    result = this.replaceByReplaceObject(replaceable);
-    result = this.replaceByIgnoredList(replaceable);
-    result = this.replaceByIgnoredConstructors(replaceable);
-    return result;
-};
-
-/**
- * @param {*} replaceable
- * @returns {*} The result of replacing replaceable based on the
- * calling Resurrect instance's toCodeList.
- * @method
- */
-Resurrect.prototype.replaceByToCodeList = function(replaceable) {
-    for (path in this.toCodeList) {
-        var objectInPath = path.split(/\./).reduce(function(object, name) {
-            if (object && object[name]) {
-                return object[name];
-            } else {
-                return null;
-            }
-        }, Resurrect.GLOBAL);
-        if (objectInPath != null && objectInPath === replaceable) {
-            return Resurrect.toCode(path);
-        }
-    }
-    return replaceable;
-};
-
-/**
- * @param {*} replaceable
- * @returns {*} The result of replacing replaceable based on the
- * calling Resurrect instance's replacements array.
- * @method
- */
-Resurrect.prototype.replaceByReplaceObject = function(replaceable) {
-    for (path in this.replacements) {
-        var objectInPath = path.split(/\./).reduce(function(object, name) {
-            if(object && object[name]) {
-                return object;
-            } else {
-                return null;
-            }
-        }, Resurrect.GLOBAL);
-        if (objectInPath != null && objectInPath === replaceable) {
-            return objectInPath;
-        }
-    }
-    return replaceable;
-};
-
-/**
- * @param {*} replaceable
- * @returns {*} The result of replacing replaceable based on the
- * calling Resurrect instance's ignoredList.
- * @method
- */
-Resurrect.prototype.replaceByIgnoredList = function(replaceable) {
-    for (path in this.ignoredObjects) {
-        var objectInPath = path.split(/\./).reduce(function(object, name) {
-            if(object && object[name]) {
-                return object;
-            } else {
-                return null;
-            }
-        }, Resurrect.GLOBAL);
-        if (objectInPath != null && objectInPath === replaceable) {
-            return Resurrect.IGNORE;
-        }
-    }
-    return replaceable;
-};
-
-/**
- * @param {*} replaceable
- * @returns {*} The result of replacing replaceable based on the
- * calling Resurrect instance's ignoredConstructors array.
- * @method
- */
-Resurrect.prototype.replaceByIgnoredConstructors = function(replaceable) {
-     for (path in this.ignoredConstructors) {
-        var objectInPath = path.split(/\./).reduce(function(object, name) {
-            if(object && object[name]) {
-                return object;
-            } else {
-                return null;
-            }
-        }, Resurrect.GLOBAL);
-        if (objectInPath != null && objectInPath === replaceable.constructor) {
-            return Resurrect.IGNORE;
-        }
-    }
-    return replaceable;
-};
 
 /**
  * Create a reference (encoding) to an object.
@@ -468,18 +271,11 @@ Resurrect.prototype.tag = function(object) {
     if (this.revive) {
         var constructor = this.resolver.getName(object);
         if (constructor) {
-            if(constructor === '(anonymous constructor)') {
-                var proto = new object.constructor();
-                object[this.prefix] = this.builder('Function', Resurrect.functionToString(object.constructor));
-            } else if(typeof constructor === 'string') {
-                var proto = Object.getPrototypeOf(object);
-                if (this.resolver.getPrototype(constructor) !== proto) {
-                    throw new this.Error('Constructor mismatch!');
-                } else {
-                    object[this.prefix] = constructor;
-                }
+            var proto = Object.getPrototypeOf(object);
+            if (this.resolver.getPrototype(constructor) !== proto) {
+                throw new this.Error('Constructor mismatch!');
             } else {
-
+                object[this.prefix] = constructor;
             }
         }
     }
@@ -515,19 +311,13 @@ Resurrect.prototype.build = function(ref) {
         return object[name];
     }, Resurrect.GLOBAL);
     /* Brilliant hack by kybernetikos: */
-    if (type === Function || type === Resurrect.CodeObject) {
-        var result = null;
-        eval('result = ' + ref[this.valuecode]);
-        return result;
+    var args = [null].concat(ref[this.valuecode]);
+    var factory = type.bind.apply(type, args);
+    var result = new factory();
+    if (Resurrect.isPrimitive(result)) {
+        return result.valueOf(); // unwrap
     } else {
-        var args = [null].concat(ref[this.valuecode]);
-        var factory = type.bind.apply(type, args);
-        var result = new factory();
-        if (Resurrect.isPrimitive(result)) {
-            return result.valueOf(); // unwrap
-        } else {
-            return result;
-        }
+        return result;
     }
 };
 
@@ -563,8 +353,7 @@ Resurrect.prototype.isTagged = function(object) {
  * @returns {*} A fresh copy of root to be serialized.
  * @method
  */
-Resurrect.prototype.visit = function(root, f, replacer, rootKey) {
-    root = replacer(rootKey, root);
+Resurrect.prototype.visit = function(root, f) {
     if (Resurrect.isAtom(root)) {
         return f(root);
     } else if (!this.isTagged(root)) {
@@ -573,22 +362,14 @@ Resurrect.prototype.visit = function(root, f, replacer, rootKey) {
             copy = [];
             root[this.refcode] = this.tag(copy);
             for (var i = 0; i < root.length; i++) {
-                copy.push(this.visit(root[i], f, replacer, i));
-                if (Resurrect.isFunction(replacer)) {
-                    //copy[key] = replacer(i, copy[i]);
-                }
-                //copy[i] = this.replaceByLists(root[i]);
+                copy.push(this.visit(root[i], f));
             }
         } else { /* Object */
             copy = Object.create(Object.getPrototypeOf(root));
             root[this.refcode] = this.tag(copy);
             for (var key in root) {
-                if (!this.ownPropertyOnly || (this.ownPropertyOnly && root.hasOwnProperty(key))) {
-                    copy[key] = this.visit(root[key], f, replacer, key);
-                    if(Resurrect.isFunction(replacer)) {
-                        //copy[key] = replacer(key, copy[key]);
-                    }
-                    //copy[key] = this.replaceByLists(root[key]);
+                if (root.hasOwnProperty(key)) {
+                    copy[key] = this.visit(root[key], f);
                 }
             }
         }
@@ -608,15 +389,8 @@ Resurrect.prototype.visit = function(root, f, replacer, rootKey) {
 Resurrect.prototype.handleAtom = function(atom) {
     var Node = Resurrect.GLOBAL.Node || function() {};
     if (Resurrect.isFunction(atom)) {
-        return this.builder('Function', [Resurrect.functionToString(atom)]);
-    }
-    else if(Resurrect.isIgnored(atom)) {
-        return undefined;
-    }
-    else if(Resurrect.isCode(atom)) {
-        return this.builder('Resurrect.CodeObject', [atom.string]);
-    }
-    else if (atom instanceof Node) {
+        throw new this.Error("Can't serialize functions.");
+    } else if (atom instanceof Node) {
         var xmls = new XMLSerializer();
         return this.builder('Resurrect.Node', [xmls.serializeToString(atom)]);
     } else if (Resurrect.isDate(atom)) {
@@ -626,7 +400,7 @@ Resurrect.prototype.handleAtom = function(atom) {
         return this.builder('RegExp', args);
     } else if (atom === undefined) {
         return this.ref(undefined);
-    } else if (Resurrect.isNumber(atom) && (isNaN(atom) || !isFinite(atom))) { //deal with this in different way?
+    } else if (Resurrect.isNumber(atom) && (isNaN(atom) || !isFinite(atom))) {
         return this.builder('Number', [atom.toString()]);
     } else {
         return atom;
@@ -650,52 +424,6 @@ Resurrect.prototype.replacerWrapper = function(replacer) {
     };
 };
 
-Resurrect.prototype.prepare = function(object, replacer, space) {
-    if(replacer === null || replacer === undefined) {
-        replacer = this.replacer;
-    }
-    if (Resurrect.isFunction(replacer)) {
-        replacer = this.replacerWrapper(replacer);
-    } else if (Resurrect.isArray(replacer)) {
-        var codes = [
-            this.prefix,
-            this.refcode,
-            this.origcode,
-            this.buildcode,
-            this.valuecode
-        ];
-        replacer = codes.concat(replacer);
-    }
-    if (Resurrect.isAtom(object)) {
-        replacer('', object);
-        object = this.replaceByLists(object);
-        return this.handleAtom(object);
-    } else {
-        this.table = [];
-        object = this.visit(object, this.handleAtom.bind(this), replacer, '');
-        for (var i = 0; i < this.table.length; i++) {
-            if (this.cleanup) {
-                delete this.table[i][this.origcode][this.refcode];
-            } else {
-                this.table[i][this.origcode][this.refcode] = null;
-            }
-            delete this.table[i][this.refcode];
-            delete this.table[i][this.origcode];
-        }
-        if(Resurrect.isAtom(object)) {
-            return Resurrect.handleAtom(object);
-        }
-        if(this.table.length > 0) {
-            var table = this.table;
-            this.table = null;
-            return table
-        }
-        else {
-            return object;
-        }
-    }
-}
-
 /**
  * Serialize an arbitrary JavaScript object, carefully preserving it.
  * @param {*} object
@@ -704,18 +432,6 @@ Resurrect.prototype.prepare = function(object, replacer, space) {
  * @method
  */
 Resurrect.prototype.stringify = function(object, replacer, space) {
-    preparedObject = this.prepare(object);
-    if(space === null || space === undefined) {
-        space = this.space;
-    }
-    return JSON.stringify(preparedObject, undefined, space);
-    /*
-    if(replacer === null || replacer === undefined) {
-        replacer = this.replacer;
-    }
-    if(space === null || space === undefined) {
-        space = this.space;
-    }
     if (Resurrect.isFunction(replacer)) {
         replacer = this.replacerWrapper(replacer);
     } else if (Resurrect.isArray(replacer)) {
@@ -729,12 +445,10 @@ Resurrect.prototype.stringify = function(object, replacer, space) {
         replacer = codes.concat(replacer);
     }
     if (Resurrect.isAtom(object)) {
-        replacer('', object);
-        object = this.replaceByLists(object);
-        return JSON.stringify(this.handleAtom(object), undefined, space);
+        return JSON.stringify(this.handleAtom(object), replacer, space);
     } else {
         this.table = [];
-        object = this.visit(object, this.handleAtom.bind(this), replacer, '');
+        this.visit(object, this.handleAtom.bind(this));
         for (var i = 0; i < this.table.length; i++) {
             if (this.cleanup) {
                 delete this.table[i][this.origcode][this.refcode];
@@ -744,19 +458,10 @@ Resurrect.prototype.stringify = function(object, replacer, space) {
             delete this.table[i][this.refcode];
             delete this.table[i][this.origcode];
         }
-        if(Resurrect.isAtom(object)) {
-            return JSON.stringify(Resurrect.handleAtom(object), undefined, space);
-        }
-        if(this.table.length > 0) {
-            var table = this.table;
-            this.table = null;
-            return JSON.stringify(table, undefined, space);
-        }
-        else {
-            return JSON.stringify(object, undefined, space);
-        }
+        var table = this.table;
+        this.table = null;
+        return JSON.stringify(table, replacer, space);
     }
-    */
 };
 
 /**
@@ -789,13 +494,20 @@ Resurrect.prototype.fixPrototype = function(object) {
     }
 };
 
-Resurrect.prototype.unpack = function(data) {
+/**
+ * Deserialize an encoded object, restoring circularity and behavior.
+ * @param {string} string
+ * @returns {*} The decoded object or value.
+ * @method
+ */
+Resurrect.prototype.resurrect = function(string) {
+    var result = null;
+    var data = JSON.parse(string);
     if (Resurrect.isArray(data)) {
         this.table = data;
         /* Restore __proto__. */
         if (this.revive) {
             for (var i = 0; i < this.table.length; i++) {
-                //this.table[i] = this.fixConstructor(this.table[i]);
                 this.table[i] = this.fixPrototype(this.table[i]);
             }
         }
@@ -820,21 +532,3 @@ Resurrect.prototype.unpack = function(data) {
     this.table = null;
     return result;
 };
-
-/**
- * Deserialize an encoded object, restoring circularity and behavior.
- * @param {string} string
- * @returns {*} The decoded object or value.
- * @method
- */
-Resurrect.prototype.resurrect = function(string) {
-    var result = null;
-    var data = JSON.parse(string);
-    return this.unpack(data);
-    
-};
-
-/*
-reused:
-split/reduce code
-*/
